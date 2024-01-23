@@ -1,70 +1,24 @@
 use nom::{
     branch::alt,
-    bytes::complete::{is_not, tag, take_until, take_while, take_while1},
-    character::complete::char,
-    combinator::{recognize, value},
-    error::{Error, ErrorKind, ParseError},
+    bytes::complete::{tag, take_until, take_while, take_while1},
+    character::complete::{char, newline, not_line_ending},
+    combinator::{opt, recognize, value},
     multi::many0,
     sequence::{delimited, pair, preceded, separated_pair, terminated},
-    Err, IResult, Parser,
+    IResult, InputLength,
 };
 
 #[cfg(test)]
 #[macro_use]
 extern crate test_case;
 
-#[macro_use]
-extern crate log;
-
 #[derive(Debug, PartialEq, Eq)]
 pub struct Document(pub Vec<Statement>);
-
-impl Document {
-    /// Creates self from a text definition of the component
-    /// ```rust
-    /// # use theme_parser::*;
-    /// #
-    /// let text = r#"
-    /// + label { thing = foo }
-    ///
-    /// + label {
-    ///   foo = thing
-    /// }
-    /// "#;
-    ///
-    /// let comp = Document::parse(text).unwrap().1;
-    ///
-    /// println!("{comp:?}");
-    /// panic!();
-    /// ```
-    pub fn parse(input: &str) -> IResult<&str, Self> {
-        let (input, list) = many0(Statement::parse)(input)?;
-
-        Ok((input, Self(list)))
-    }
-}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Statement {
     GlobalProperty(GlobalProperty),
     Component(Component),
-}
-
-impl Statement {
-    pub fn parse(input: &str) -> IResult<&str, Self> {
-        either(vec![
-            |input| {
-                let (input, gp) = GlobalProperty::parse(input)?;
-                debug!("Parsing global property");
-                Ok((input, Self::GlobalProperty(gp)))
-            },
-            |input| {
-                let (input, c) = Component::parse(input)?;
-                debug!("Parsing component");
-                Ok((input, Self::Component(c)))
-            },
-        ])(input)
-    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -73,9 +27,50 @@ pub struct GlobalProperty {
     pub value: String,
 }
 
-impl GlobalProperty {
+#[derive(Debug, PartialEq, Eq)]
+pub struct Component {
+    pub name: String,
+    pub properties: Vec<ComponentProperty>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ComponentProperty {
+    pub name: String,
+    pub value: String,
+}
+
+impl Document {
     pub fn parse(input: &str) -> IResult<&str, Self> {
-        let (input, (name, value)) = global_property(input)?;
+        let (input, list) = many0(Statement::parse)(input)?;
+
+        Ok((input, Self(list)))
+    }
+}
+
+impl Statement {
+    pub fn parse(input: &str) -> IResult<&str, Self> {
+        let (cleaned, ()) = preceded_empty(input)?;
+        alt((
+            |input| {
+                let (input, gp) = GlobalProperty::parse(input)?;
+                Ok((input, Self::GlobalProperty(gp)))
+            },
+            |input| {
+                let (input, c) = Component::parse(input)?;
+                Ok((input, Self::Component(c)))
+            },
+        ))(cleaned)
+    }
+}
+
+impl GlobalProperty {
+    fn parse(input: &str) -> IResult<&str, Self> {
+        let (input, (name, value)) = separated_pair(
+            identifier,
+            delimited(whitespace0, tag(":"), whitespace0),
+            expression,
+        )(input)?;
+
         Ok((
             input,
             Self {
@@ -86,41 +81,26 @@ impl GlobalProperty {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct Component {
-    pub name: String,
-    pub properties: Vec<ComponentProperty>,
-}
-
 impl Component {
-    /// Creates self from a text definition of the component
-    /// ```rust
-    /// # use theme_parser::ComponentProperty;
-    /// # use theme_parser::Component;
-    /// #
-    /// let text = r#"
-    /// + label {
-    ///   text = "Hello world"
-    /// }"#;
-    ///
-    /// let comp = Component::parse(text).unwrap().1;
-    ///
-    /// assert_eq!(comp, Component {
-    ///     name: "label".to_string(),
-    ///     properties: vec![
-    ///         ComponentProperty{
-    ///             name: "text".to_string(),
-    ///             value: "Hello world".to_string()
-    ///     }],
-    /// });
-    /// ```
-    pub fn parse(input: &str) -> IResult<&str, Self> {
-        let (input, (name, values)) = component(input)?;
+    fn parse(input: &str) -> IResult<&str, Self> {
+        let (input, ()) = preceded_empty(input)?;
+        let (input, (name, props)) = preceded(
+            terminated(tag("+"), whitespace0),
+            pair(
+                identifier,
+                delimited(
+                    preceded(whitespace0, tag("{")),
+                    many0(component_property),
+                    preceded(preceded_empty, tag("}")),
+                ),
+            ),
+        )(input)?;
+
         Ok((
             input,
             Self {
                 name: name.to_string(),
-                properties: values
+                properties: props
                     .iter()
                     .map(|(name, value)| ComponentProperty {
                         name: name.to_string(),
@@ -132,57 +112,16 @@ impl Component {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct ComponentProperty {
-    pub name: String,
-    pub value: String,
-}
-
-pub fn global_property(input: &str) -> IResult<&str, (&str, &str)> {
-    let (input, ()) = preceding_empty(input)?;
-
-    separated_pair(
-        identifier,
-        delimited(whitespace0, tag(":"), whitespace0),
-        expression,
-    )(input)
-}
-
-type ParsedComponent<'a> = (&'a str, Vec<(&'a str, &'a str)>);
-
-pub fn component(input: &str) -> IResult<&str, ParsedComponent> {
-    let (input, ()) = preceding_empty(input)?;
-
-    preceded(
-        terminated(tag("+"), whitespace0),
-        pair(identifier, component_property_list),
-    )(input)
-}
-
-pub fn comment(input: &str) -> IResult<&str, ()> {
-    value(
-        (), // Output is thrown away.
-        preceded(whitespace0, pair(char('#'), is_not("\n"))),
-    )(input)
-}
-
 fn component_property(input: &str) -> IResult<&str, (&str, &str)> {
+    let (input, ()) = preceded_empty(input)?;
+
     separated_pair(
         identifier,
-        delimited(whitespace0, tag("="), whitespace0),
+        delimited(whitespace0, char('='), whitespace0),
         expression,
     )(input)
 }
 
-fn component_property_list(input: &str) -> IResult<&str, Vec<(&str, &str)>> {
-    delimited(
-        preceded(whitespace0, tag("{")),
-        many0(preceded(preceding_empty, component_property)),
-        preceded(preceding_empty, tag("}")),
-    )(input)
-}
-
-/// Returns an identifier composed of alphanumeric characters and `-`, `_`.
 fn identifier(input: &str) -> IResult<&str, &str> {
     preceded(
         whitespace0,
@@ -193,7 +132,6 @@ fn identifier(input: &str) -> IResult<&str, &str> {
 }
 
 /// Returns either a `"quoted string"`, a `(tuple with arbitrary content)` or a single `word`.
-/// There should be no spaces in the beginning of `input`.
 fn expression(input: &str) -> IResult<&str, &str> {
     let (input, _) = whitespace0(input)?;
 
@@ -201,113 +139,95 @@ fn expression(input: &str) -> IResult<&str, &str> {
         Some('"') => delimited(tag("\""), take_until("\""), tag("\""))(input),
         Some('(') => recognize(delimited(tag("("), take_until(")"), tag(")")))(input),
         Some(_) => take_while(|c: char| !c.is_whitespace())(input),
-        None => Err(Err::Error(Error::new(input, ErrorKind::Eof))),
+        None => Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Eof,
+        ))),
     }
 }
 
-/// Replacement for `space0` function from nom.
-/// This function uses char::is_whitespace instead of just matching space and tabs.
+fn preceded_empty(input: &str) -> IResult<&str, ()> {
+    value((), many0(alt((comment, whitespace1))))(input)
+}
+
+fn whitespace1(input: &str) -> IResult<&str, ()> {
+    let (i1, ()) = whitespace0(input)?;
+
+    if i1.input_len() == input.input_len() {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Space,
+        )));
+    }
+
+    Ok((i1, ()))
+}
+
 fn whitespace0(input: &str) -> IResult<&str, ()> {
     value((), take_while(char::is_whitespace))(input)
 }
 
-fn preceding_empty(input: &str) -> IResult<&str, ()> {
-    let res = value((), many0(either(vec![whitespace0, comment])))(input);
-    let a = alt((whitespace0,));
-    // If neither of parsers captured anything its ok
-    if let Err(nom::Err::Error(Error {
-        input: _,
-        code: ErrorKind::Many0,
-    })) = res
-    {
-        Ok((input, ()))
-    } else {
-        res
-    }
-}
-
-pub fn either<I, O, E>(mut parsers: Vec<impl Parser<I, O, E>>) -> impl FnMut(I) -> IResult<I, O, E>
-where
-    I: Clone,
-    E: ParseError<I>,
-{
-    move |input| {
-        let mut parsers = parsers.iter_mut();
-
-        let mut res = parsers
-            .next()
-            .expect("The list of parsers should never be empty.")
-            .parse(input.clone());
-
-        for p in parsers {
-            if res.is_ok() {
-                break;
-            }
-
-            res = p.parse(input.clone());
-        }
-
-        res
-    }
+fn comment(input: &str) -> IResult<&str, ()> {
+    value((), delimited(char('#'), not_line_ending, opt(newline)))(input)
 }
 
 #[cfg(test)]
 mod tests {
+    #![allow(non_snake_case)] // Tests of class methods are inside same-name modules
+
     use nom::IResult;
 
-    #[test_case("size: 30" => Ok(("", ("size", "30"))); "number value")]
-    #[test_case("size: \"30\"" => Ok(("", ("size", "30"))); "quoted value")]
-    #[test_case("position: center" => Ok(("", ("position", "center"))); "word value")]
-    #[test_case("size: (10 10)" => Ok(("", ("size", "(10 10)"))); "tuple value")]
-    #[test_case("size: trailing word" => Ok((" word", ("size", "trailing"))); "trailing word not captured")]
-    fn global_property(input: &str) -> IResult<&str, (&str, &str)> {
-        super::global_property(input)
-    }
-
-    #[test_case(
-r#"+ label {
-    size = 30
-}"# => Ok(("", ("label", vec![
-        ("size", "30")
-    ]))); "simple label")]
-    fn component(input: &str) -> IResult<&str, (&str, Vec<(&str, &str)>)> {
-        super::component(input)
-    }
-
-    #[test_case("# test" => Ok(("", ())); "at end of document")]
-    // Should preserve \n because all that should happen is removing the comment text
-    #[test_case("# test\nsomething" => Ok(("\nsomething", ())); "has content later")]
-    fn comment(input: &str) -> IResult<&str, ()> {
-        super::comment(input)
-    }
-
-    #[test_case("identifier" => Ok(("", "identifier")); "alha")]
-    #[test_case("two_words" => Ok(("", "two_words")); "with underscore")]
-    #[test_case("two-words" => Ok(("", "two-words")); "with dash")]
-    #[test_case("123-alpha_test" => Ok(("", "123-alpha_test")); "all allowed character types")]
-    fn identifier(input: &str) -> IResult<&str, &str> {
-        super::identifier(input)
-    }
-
-    #[test_case(r#""quoted string""# => Ok(("", "quoted string")); "quoted")]
-    #[test_case("(tuple , thing)" => Ok(("", "(tuple , thing)")); "tuple")]
-    #[test_case("().." => Ok(("..", "()")); "tuple with trailing characters")]
-    #[test_case("word" => Ok(("", "word")); "word")]
-    fn expression(input: &str) -> IResult<&str, &str> {
-        super::expression(input)
-    }
-
-    #[test_case("prop = value" => Ok(("", ("prop", "value"))); "prop is value")]
+    #[test_case("# doc\nkey = value # doc" => Ok((" # doc", ("key", "value"))); "key eq value with docs around")]
     fn component_property(input: &str) -> IResult<&str, (&str, &str)> {
         super::component_property(input)
     }
 
-    #[test_case("{ prop = value prop2 = value }" => Ok(("", vec![("prop", "value"), ("prop2", "value")])); "one liner")]
-    #[test_case(r#"{
-        prop = value
-        prop2 = value
-    }"# => Ok(("", vec![("prop", "value"), ("prop2", "value")])); "multi line")]
-    fn component_property_list(input: &str) -> IResult<&str, Vec<(&str, &str)>> {
-        super::component_property_list(input)
+    #[test_case("" => Ok(("", ())); "empty input")]
+    #[test_case("\n\n\n   \t\t \n" => Ok(("", ())); "some spaces")]
+    #[test_case("  a" => Ok(("a", ())); "space, then any character")]
+    #[test_case("# comment" => Ok(("", ())); "single comment")]
+    #[test_case("#" => Ok(("", ())); "just the hash symbol")]
+    #[test_case(r"# some comment
+
+    # and empty lines
+    
+    finally stuff" => Ok(("finally stuff", ())); "whitespace and comments")]
+    #[test_case("should not change anything\n# dont touch this later comment" 
+    => Ok(("should not change anything\n# dont touch this later comment", ()));
+     "unchanged")]
+    fn preceded_empty(input: &str) -> IResult<&str, ()> {
+        super::preceded_empty(input)
+    }
+
+    #[test_case("# some comment
+finally stuff" => Ok(("finally stuff", ())); "a comment with content on next line")]
+    pub fn comment(input: &str) -> IResult<&str, ()> {
+        super::comment(input)
+    }
+
+    mod Statement {
+        use super::super::{Component, ComponentProperty, GlobalProperty, Statement};
+
+        use nom::IResult;
+
+        #[test_case(r"# docs
+        name: value" => Ok(("", Statement::GlobalProperty(GlobalProperty{
+            name: "name".to_string(),
+            value: "value".to_string()
+        }))); "global property with doc comment above")]
+        #[test_case(r"# docs
+        + label { #
+            # doc
+            prop = value # doc
+        }" => Ok(("", Statement::Component(Component{
+            name: "label".to_string(),
+            properties: vec![ComponentProperty{
+                name: "prop".to_string(),
+                value: "value".to_string(),
+            }]
+        }))); "component with many comments")]
+        fn parse(input: &str) -> IResult<&str, Statement> {
+            Statement::parse(input)
+        }
     }
 }
