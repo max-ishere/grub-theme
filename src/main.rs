@@ -3,7 +3,7 @@ use std::{fs::read_to_string, sync::Arc};
 use args::Args;
 use clap::Parser;
 use nom::{error::Error, Finish};
-use theme_parser::Document;
+use theme_parser::theme_txt::Document;
 
 mod args;
 
