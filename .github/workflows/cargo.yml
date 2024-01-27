@@ -2,12 +2,15 @@ name: Check project with cargo tooling
 
 on:
   push:
-    paths-ignore:
-      - '**/README.md'
+    paths:
+      - '**.rs'
+      - '.github/workflows/**.yml'
   pull_request:
-    paths-ignore:
-      - '**/README.md'
-  
+    paths:
+      - '**.rs'
+      - '.github/workflows/**.yml'
+  workflow_dispatch:
+
 env:
   CARGO_TERM_COLOR: always
 
