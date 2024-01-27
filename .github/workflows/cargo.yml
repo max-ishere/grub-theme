@@ -1,0 +1,72 @@
+name: Check project with cargo tooling
+
+on:
+  push:
+  pull_request:
+  
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/cache/restore@v4
+      with:
+        path: target/
+        key: build-${{ hashFiles('Cargo.lock') }}
+
+    - name: build
+      run: cargo build --release --all-targets --keep-going --verbose
+
+    - uses: actions/cache/save@v4
+      with:
+        path: target/
+        key: build-${{ hashFiles('Cargo.lock') }}
+    
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/cache/restore@v4
+      with:
+        path: target/
+        key: test-${{ hashFiles('Cargo.lock') }}
+
+    - name: test
+      run: cargo test --no-fail-fast --all-targets --verbose
+
+    - name: test docs
+      run: cargo test --no-fail-fast --doc --verbose
+
+    - uses: actions/cache/save@v4
+      with:
+        path: target/
+        key: test-${{ hashFiles('Cargo.lock') }}
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/cache/restore@v4
+      with:
+        path: target/
+        key: lint-${{ hashFiles('Cargo.lock') }}
+
+    - name: check
+      run: cargo clippy --no-deps --all-targets --verbose
+
+    - uses: actions/cache/save@v4
+      with:
+        path: target/
+        key: lint-${{ hashFiles('Cargo.lock') }}
