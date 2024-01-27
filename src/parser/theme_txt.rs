@@ -4,7 +4,7 @@
 //! statements, each is either a [`Component`] or a [`GlobalProperty`].
 //!
 //! ```rust
-//! # use theme_parser::theme_txt::*;
+//! # use theme_parser::parser::theme_txt::*;
 //! let theme_txt = r#"# your average theme file
 //!
 //! terminal-font: "Monospace"

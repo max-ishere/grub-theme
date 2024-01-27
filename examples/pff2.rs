@@ -4,7 +4,7 @@ use std::fs::read;
 
 use args::Args;
 use clap::Parser as _;
-use theme_parser::pff2::Parser;
+use theme_parser::parser::pff2::Parser;
 
 mod args {
     use std::path::PathBuf;
