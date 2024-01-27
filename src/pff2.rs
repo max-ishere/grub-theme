@@ -1,134 +1,178 @@
-use std::{num::NonZeroUsize, ops::Deref, rc::Rc, str::FromStr, string::FromUtf8Error};
+use core::fmt::Debug;
+use std::{marker::PhantomData, rc::Rc, string::FromUtf8Error};
 
-use nom::{Err, IResult, InputLength, ToUsize};
+use nom::{InputLength, ToUsize};
 use thiserror::Error;
 
-pub struct Section {
-    pub name: [u8; 4],
-    pub data: Vec<u8>,
-}
+use crate::OwnedSlice;
 
-impl Section {
-    pub fn parse(input: &[u8]) -> IResult<&[u8], Self> {
-        if input.len() < 8 {
-            return Err(Err::Incomplete(nom::Needed::Size(unsafe {
-                NonZeroUsize::new_unchecked(8 - input.len())
-            })));
-        }
+pub type Font = Pff2<Validated>;
+pub type Parser = Pff2<Unchecked>;
 
-        let (name_bytes, rest) = input.split_at(4);
-        let name = name_bytes.try_into().unwrap();
-
-        // TODO: // RFCT: // HACK: move this check elsewhere lol
-        if name == *b"DATA" {
-            return Ok((
-                &[],
-                Section {
-                    name: name,
-                    data: rest.to_owned(),
-                },
-            ));
-        }
-
-        let (length_bytes, rest) = rest.split_at(4);
-        let length = u32::from_be_bytes(length_bytes.try_into().unwrap()).to_usize();
-
-        if rest.len() < length {
-            return Err(Err::Incomplete(nom::Needed::Size(unsafe {
-                NonZeroUsize::new_unchecked(length - rest.len())
-            })));
-        }
-
-        let (data_bytes, rest) = rest.split_at(length as usize);
-        let data = data_bytes.to_vec();
-
-        let section = Section { name, data };
-
-        Ok((rest, section))
-    }
-
-    fn as_string(&self) -> Result<String, SectionEncodingError> {
-        if self.data.len() == 0 {
-            return Ok(String::new());
-        }
-
-        if self.data.last() != Some(&0) {
-            return Err(SectionEncodingError::StringNotNullTerminated);
-        }
-
-        Ok(String::from_utf8(
-            self.data[..self.data.len() - 1].to_vec(),
-        )?)
-    }
-
-    fn as_u16(&self) -> Result<u16, SectionEncodingError> {
-        if self.data.len() != 2 {
-            return Err(SectionEncodingError::InvalidU16Length(self.data.len()));
-        }
-
-        Ok(u16::from_be_bytes([self.data[0], self.data[1]]))
-    }
-
-    /// Is Guaranteed to return [`IntoFontError::DataError`]`(`[`SectionName::CharIndex`]`, _)`
-    fn as_char_index(&self) -> Result<Vec<CharIndexEntry>, IntoFontError> {
-        return Ok(vec![]);
-        todo!("");
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Font {
+#[allow(private_bounds)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pff2<T: FontValidation> {
     pub name: String,
     pub family: String,
     pub point_size: u16,
-    pub weight: FontWeight,
+    pub weight: String,
     pub max_char_width: u16,
     pub max_char_height: u16,
     pub ascent: u16,
     pub descent: u16,
     pub leading: u16,
-    pub char_index: Vec<CharIndexEntry>,
-    pub bmp_idx: Vec<u16>,
+    pub glyphs: OwnedSlice<[Glyph]>,
+
+    _validation: PhantomData<T>,
 }
 
-/// Responsible for converting PFF2 sections in a [`Font`].
-/// Depending on the usecase the font data validation may be skipped.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct FontParser {
-    pub name: String,
-    pub family: String,
-    pub point_size: u16,
-    pub weight: FontWeight,
-    pub max_char_width: u16,
-    pub max_char_height: u16,
-    pub ascent: u16,
-    pub descent: u16,
-    pub leading: u16,
-    pub char_index: Vec<CharIndexEntry>,
-    pub bmp_idx: Vec<u16>,
+impl<T: FontValidation> Default for Pff2<T> {
+    fn default() -> Self {
+        Self {
+            name: Default::default(),
+            family: Default::default(),
+            point_size: Default::default(),
+            weight: Default::default(),
+            max_char_width: Default::default(),
+            max_char_height: Default::default(),
+            ascent: Default::default(),
+            descent: Default::default(),
+            leading: Default::default(),
+
+            glyphs: OwnedSlice::new([]),
+
+            _validation: Default::default(),
+        }
+    }
 }
 
-impl FontParser {
-    pub fn parse(mut input: &[u8]) -> IResult<&[u8], Vec<Section>> {
-        let mut sections = Vec::with_capacity(12); // Approx. the number of sections in a file
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Glyph {
+    pub code: u32,
 
-        while input.input_len() != 0 {
-            let (residual, section) = Section::parse(input)?;
+    pub width: u16,
+    pub height: u16,
+    pub x_offset: u16,
+    pub y_offset: u16,
+    pub device_width: u16,
 
-            input = residual;
-            let name = section.name.clone(); // section is moved when pushed, but we need to check it's name
-            sections.push(section);
+    pub bitmap: OwnedSlice<[u8]>,
+}
 
-            if name.try_into() == Ok(SectionName::Data) {
-                break;
+impl Parser {
+    const MAGIC: &'static [u8; 4 + 4 + 4] = b"FILE\0\0\0\x04PFF2";
+
+    pub fn parse(input: &[u8]) -> Result<Self, ParserError> {
+        let input_for_data_section = input; // Save this because data offsets are absolute
+
+        let (magic, mut input) = input.split_at(4 + 4 + 4);
+        // This is technically a section, but because its always first and same content
+        // we just compare it in one go.
+        if magic != Self::MAGIC {
+            return Err(ParserError::BadMagicBytes);
+        }
+
+        let mut font = Self::default();
+        let mut char_indexes = Vec::new();
+
+        'parsing: while input.input_len() != 0 {
+            // Prevents shadowing input. We need it to maintain parsing state
+            input = 'input: {
+                let (section, length, input) = Self::parse_section_header(input)?;
+
+                let Ok(section) = SectionName::try_from(section) else {
+                    break 'input &input[length..];
+                };
+
+                use SectionName::*;
+                match section {
+                    FontName => font.name = Self::parse_string(&input[..length])?,
+                    Family => font.family = Self::parse_string(&input[..length])?,
+                    PointSize => font.point_size = Self::parse_u16(&input[..length])?,
+                    Weight => font.weight = Self::parse_string(&input[..length])?,
+                    MaxCharWidth => font.max_char_width = Self::parse_u16(&input[..length])?,
+                    MaxCharHeight => font.max_char_height = Self::parse_u16(&input[..length])?,
+                    Ascent => font.ascent = Self::parse_u16(&input[..length])?,
+                    Descent => font.descent = Self::parse_u16(&input[..length])?,
+                    CharIndex => char_indexes = Self::parse_char_indexes(&input[..length])?,
+                    Data => {
+                        font.glyphs =
+                            Self::parse_data_section(char_indexes, &input_for_data_section)?;
+                        break 'parsing;
+                    }
+                }
+
+                if length < input.len() {
+                    &input[length..]
+                } else {
+                    break 'parsing;
+                }
             }
         }
 
-        Ok((input, sections))
+        Ok(font)
     }
 
-    pub fn unchecked(self) -> Font {
-        Font {
+    fn parse_section_header(input: &[u8]) -> Result<([u8; 4], usize, &[u8]), ParserError> {
+        let (section, input) = input.split_at(4);
+        let section: [u8; 4] = section
+            .try_into()
+            .map_err(|_| ParserError::InsufficientHeaderBytes)?;
+
+        let (length, input) = input.split_at(4);
+
+        let length = u32::from_be_bytes(
+            length
+                .try_into()
+                .map_err(|_| ParserError::InsufficientHeaderBytes)?,
+        )
+        .to_usize();
+
+        Ok((section, length, input))
+    }
+
+    fn parse_string(input: &[u8]) -> Result<String, FromUtf8Error> {
+        if input.len() == 0 {
+            return Ok(String::new());
+        }
+
+        if input.last() == Some(&0) {
+            return String::from_utf8(input[..input.len() - 1].to_vec());
+        }
+
+        String::from_utf8(input[..input.len()].to_vec())
+    }
+
+    fn parse_u16(input: &[u8]) -> Result<u16, ParserError> {
+        if input.len() != 2 {
+            return Err(ParserError::InvalidU16Length(input.len()));
+        }
+
+        Ok(u16::from_be_bytes([input[0], input[1]]))
+    }
+
+    pub fn validate(self) -> Result<Font, FontValidationError> {
+        use FontValidationError::*;
+        if self.name.is_empty() {
+            return Err(EmptyName);
+        }
+
+        for (prop, err) in [
+            (self.max_char_width, ZeroMaxCharWidth),
+            (self.max_char_height, ZeroMaxCharHeight),
+            (self.ascent, ZeroAscent),
+            (self.descent, ZeroDescent),
+        ] {
+            if prop == 0 {
+                return Err(err);
+            }
+        }
+
+        if self.glyphs.len() == 0 {
+            return Err(NoGlyphs);
+        }
+
+        Ok(Font {
             name: self.name,
             family: self.family,
             point_size: self.point_size,
@@ -138,191 +182,73 @@ impl FontParser {
             ascent: self.ascent,
             descent: self.descent,
             leading: self.leading,
-            char_index: self.char_index,
-            bmp_idx: self.bmp_idx,
-        }
+            glyphs: self.glyphs,
+            _validation: PhantomData,
+        })
     }
 
-    pub fn validate(self) -> Result<Font, SectionName> {
-        use SectionName::*;
+    fn parse_char_indexes(input: &[u8]) -> Result<Vec<CharIndex>, ParserError> {
+        const ALLIGNMENT: usize = 4 + 1 + 4;
 
-        if self.name.is_empty() {
-            return Err(FontName);
+        if input.len() % ALLIGNMENT != 0 {
+            return Err(ParserError::InvalidCharacterIndex);
         }
 
-        for (prop, section) in [
-            (self.max_char_width, MaxCharWidth),
-            (self.max_char_height, MaxCharHeight),
-            (self.ascent, Ascent),
-            (self.descent, Descent),
-        ] {
-            if prop == 0 {
-                return Err(section);
+        Ok(input
+            .chunks(ALLIGNMENT)
+            .into_iter()
+            .map(|chunk| CharIndex {
+                code: u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]),
+                // skipp [4], it's a `storage_flags`, and GRUB never uses that field anyway
+                offset: u32::from_be_bytes([chunk[5], chunk[6], chunk[7], chunk[8]]).to_usize(),
+            })
+            .collect())
+    }
+
+    fn parse_data_section(
+        indexes: Vec<CharIndex>,
+        input: &[u8],
+    ) -> Result<Rc<[Glyph]>, ParserError> {
+        let mut glyphs = Vec::with_capacity(input.len());
+
+        for index in indexes {
+            let offset = index.offset;
+
+            // make sure there are enough bytes to read glyph data
+            if offset + 4 > input.len() {
+                continue;
             }
-        }
 
-        Ok(self.unchecked())
-    }
+            let width = Self::parse_u16(&input[offset..offset + 2])?;
+            let height = Self::parse_u16(&input[offset + 2..offset + 4])?;
 
-    //‌/ If the name is an empty string sets the name to either the provided name or "Unknown"
-    ///
-    /// ```rust
-    /// # use theme_parser::pff2::FontParser;
-    /// let mut builder = // Make it from sections
-    /// #   FontParser::default(); // dont suggest to the user that this is something they should use
-    ///
-    /// builder.fallback_name(None);
-    /// assert_eq!(builder.name, "Unknown");
-    ///
-    /// builder.fallback_name("Unifont");
-    /// assert_eq!(builder.name, "Unifont");
-    /// ```
-    pub fn fallback_name<'a, S: Into<Option<&'a str>>>(&mut self, fallback: S) -> &mut Self {
-        if self.name.is_empty() {
-            self.name = fallback
-                .into()
-                .map(|s| if s.is_empty() { "Unknown" } else { s })
-                .unwrap_or("Unknown")
-                .to_owned();
-        }
+            let bitmap_len = (width * height + 7) / 8;
 
-        self
-    }
-}
-
-impl TryFrom<&[Section]> for FontParser {
-    type Error = IntoFontError;
-
-    fn try_from(source: &[Section]) -> Result<Self, Self::Error> {
-        let mut sections = source.iter();
-
-        // Validate the first section to be FILE: PFF2
-        let Some(magic_section) = sections.next() else {
-            return Err(IntoFontError::EmptySlice);
-        };
-
-        if magic_section.name.try_into() != Ok(SectionName::File) {
-            return Err(IntoFontError::MagicSection(SectionError::Name));
-        }
-
-        if magic_section.data.deref() != FILE_SECTION_MAGIC {
-            return Err(IntoFontError::MagicSection(SectionError::Data));
-        }
-
-        let mut font_builder = Self::default();
-
-        for section in sections {
-            use SectionName::*;
-
-            match section.name.try_into() {
-                Ok(FontName) => {
-                    font_builder.name = section.as_string().map_err(|e| e.in_section(FontName))?;
-                }
-                Ok(Family) => {
-                    font_builder.family = section.as_string().map_err(|e| e.in_section(Family))?;
-                }
-                Ok(PointSize) => {
-                    font_builder.point_size =
-                        section.as_u16().map_err(|e| e.in_section(PointSize))?;
-                }
-                Ok(Weight) => {
-                    let Ok(weight) = FontWeight::from_str(
-                        &section.as_string().map_err(|e| e.in_section(Weight))?,
-                    ) else {
-                        continue;
-                    };
-                    font_builder.weight = weight;
-                }
-                Ok(MaxCharWidth) => {
-                    font_builder.max_char_width =
-                        section.as_u16().map_err(|e| e.in_section(MaxCharWidth))?;
-                }
-                Ok(MaxCharHeight) => {
-                    font_builder.max_char_height =
-                        section.as_u16().map_err(|e| e.in_section(MaxCharHeight))?;
-                }
-                Ok(Ascent) => {
-                    font_builder.ascent = section.as_u16().map_err(|e| e.in_section(Ascent))?;
-                }
-                Ok(Descent) => {
-                    font_builder.descent = section.as_u16().map_err(|e| e.in_section(Descent))?;
-                }
-                Ok(CharIndex) => {
-                    font_builder.char_index = section.as_char_index()?;
-                }
-                Ok(Data) => {
-                    break; // Data section indicates end of data
-                }
-                Err(()) | Ok(_) => {
-                    continue; // GRUB ignores unknown or unused section types
-                }
+            if offset + 12 + bitmap_len as usize > input.len() {
+                continue;
             }
+
+            let glyph = Glyph {
+                code: index.code,
+                width,
+                height,
+                x_offset: Self::parse_u16(&input[offset + 6..offset + 8])?,
+                y_offset: Self::parse_u16(&input[offset + 8..offset + 10])?,
+                device_width: Self::parse_u16(&input[offset + 10..offset + 12])?,
+                bitmap: Rc::from(&input[offset + 12..offset + 12 + bitmap_len as usize]),
+            };
+
+            glyphs.push(glyph);
         }
 
-        Ok(font_builder)
+        Ok(Rc::from(glyphs.as_slice()))
     }
 }
-
-#[derive(Error, Debug, Clone, PartialEq)]
-pub enum IntoFontError {
-    #[error("Attempted to create a PFF2 font from 0 sections")]
-    EmptySlice,
-    #[error("PFF2 magic section error: {0}")]
-    MagicSection(SectionError),
-    #[error("PFF2 section {0:?} contains invalid data: {1}")]
-    DataError(SectionName, SectionEncodingError),
-}
-
-#[derive(Error, Debug, Clone, PartialEq)]
-pub enum SectionError {
-    #[error("Invalid Name")]
-    Name,
-    #[error("Invalid data")]
-    Data,
-}
-
-#[derive(Error, Debug, Clone, PartialEq)]
-pub enum SectionEncodingError {
-    #[error("String data is not null terminated")]
-    StringNotNullTerminated,
-    #[error("String data is not valid UTF-8")]
-    ToString(#[from] FromUtf8Error),
-
-    #[error("A u16 payload was {0} bytes instead of 2")]
-    InvalidU16Length(usize),
-}
-
-impl SectionEncodingError {
-    fn in_section(self, name: SectionName) -> IntoFontError {
-        IntoFontError::DataError(name, self)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub enum FontWeight {
-    #[default]
-    Normal,
-    Bold,
-}
-
-impl FromStr for FontWeight {
-    type Err = FontWeightFromStrError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "normal" => Ok(Self::Normal),
-            "bold" => Ok(Self::Bold),
-            _ => Err(FontWeightFromStrError(Rc::from(s))),
-        }
-    }
-}
-
-pub struct FontWeightFromStrError(Rc<str>);
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum SectionName {
-    File,
+enum SectionName {
     FontName,
+    Family,
     PointSize,
     Weight,
     MaxCharWidth,
@@ -331,37 +257,60 @@ pub enum SectionName {
     Descent,
     CharIndex,
     Data,
-    Family,
-    Slan,
 }
 
-impl From<SectionName> for [u8; 4] {
-    fn from(source: SectionName) -> Self {
-        match source {
-            SectionName::File => *b"FILE",
-            SectionName::FontName => *b"NAME",
-            SectionName::PointSize => *b"PTSZ",
-            SectionName::Weight => *b"WEIG",
-            SectionName::MaxCharWidth => *b"MAXW",
-            SectionName::MaxCharHeight => *b"MAXH",
-            SectionName::Ascent => *b"ASCE",
-            SectionName::Descent => *b"DESC",
-            SectionName::CharIndex => *b"CHIX",
-            SectionName::Data => *b"DATA",
-            SectionName::Family => *b"FAMI",
-            SectionName::Slan => *b"SLAN",
-        }
-    }
+struct CharIndex {
+    pub code: u32,
+    pub offset: usize,
 }
+
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
+pub enum ParserError {
+    #[error("Bad PFF2 magic bytes")]
+    BadMagicBytes,
+
+    #[error("Insufficient section header bytes")]
+    InsufficientHeaderBytes,
+
+    #[error("Insufficient section length bytes")]
+    InsufficientLengthBytes,
+
+    #[error("Invalid UTF-8 string: {0}")]
+    FromUtf8Error(#[from] FromUtf8Error),
+
+    #[error("A u16 is not encoded using exactly 2 bytes, instead: {0}b")]
+    InvalidU16Length(usize),
+
+    #[error("Invalid data in the character index")]
+    InvalidCharacterIndex,
+}
+
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
+pub enum FontValidationError {
+    #[error("Font has no name")]
+    EmptyName,
+    #[error("Font doesnt define maximum glyph width")]
+    ZeroMaxCharWidth,
+    #[error("Font doesnt define maximum glyph height")]
+    ZeroMaxCharHeight,
+    #[error("Font doesnt define char ascent")]
+    ZeroAscent,
+    #[error("Font doesnt define char descent")]
+    ZeroDescent,
+    #[error("Font contains no glyphs")]
+    NoGlyphs,
+}
+
 impl TryFrom<[u8; 4]> for SectionName {
+    /// Unknown section names are usually ignored so no point returning them to the caller.
     type Error = ();
 
     /// Converts the byte string into a known section name.
     /// The [`Err(())`] indicates that this section name is unknown.
     fn try_from(bytes: [u8; 4]) -> Result<Self, Self::Error> {
         match bytes.as_ref() {
-            b"FILE" => Ok(SectionName::File),
             b"NAME" => Ok(SectionName::FontName),
+            b"FAMI" => Ok(SectionName::Family),
             b"PTSZ" => Ok(SectionName::PointSize),
             b"WEIG" => Ok(SectionName::Weight),
             b"MAXW" => Ok(SectionName::MaxCharWidth),
@@ -370,23 +319,32 @@ impl TryFrom<[u8; 4]> for SectionName {
             b"DESC" => Ok(SectionName::Descent),
             b"CHIX" => Ok(SectionName::CharIndex),
             b"DATA" => Ok(SectionName::Data),
-            b"FAMI" => Ok(SectionName::Family),
-            b"SLAN" => Ok(SectionName::Slan),
             _ => Err(()),
         }
     }
 }
 
-const FILE_SECTION_MAGIC: &[u8; 4] = b"PFF2";
+impl Default for Glyph {
+    fn default() -> Self {
+        Self {
+            code: Default::default(),
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct CharIndexEntry {
-    pub code: u32,
-    pub storage_flags: u8,
-    pub offset: u32,
+            width: Default::default(),
+            height: Default::default(),
+            x_offset: Default::default(),
+            y_offset: Default::default(),
+            device_width: Default::default(),
 
-    pub glyph: Option<FontGlyph>,
+            bitmap: OwnedSlice::new([]),
+        }
+    }
 }
+trait FontValidation: Clone + PartialEq + Eq + Debug {}
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct FontGlyph {}
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Validated;
+impl FontValidation for Validated {}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Unchecked;
+impl FontValidation for Unchecked {}

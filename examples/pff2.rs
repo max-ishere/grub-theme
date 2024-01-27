@@ -3,8 +3,8 @@
 use std::fs::read;
 
 use args::Args;
-use clap::Parser;
-use theme_parser::pff2::FontParser;
+use clap::Parser as _;
+use theme_parser::pff2::Parser;
 
 mod args {
     use std::path::PathBuf;
@@ -22,12 +22,14 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let data = read(args.font_file)?;
-    let sections = FontParser::parse(&data).unwrap().1;
-    let font = FontParser::try_from(sections.as_slice())?
-        .validate()
-        .unwrap();
+    let font = Parser::parse(&data).unwrap().validate();
 
-    println!("{:#?}", font);
+    let print = format!("{font:#?}")
+        .split("\n")
+        .take(100)
+        .fold(String::new(), |print, line| print + line + "\n");
+
+    println!("{print}");
 
     Ok(())
 }
