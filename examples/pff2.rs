@@ -22,7 +22,7 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let data = read(args.font_file)?;
-    let font = Parser::parse(&data).unwrap().validate();
+    let font = Parser::parse(&data)?.validate();
 
     let print = format!("{font:#?}")
         .split("\n")

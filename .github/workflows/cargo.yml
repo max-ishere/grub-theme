@@ -73,6 +73,9 @@ jobs:
     - name: check
       run: cargo clippy --no-deps --all-targets --verbose
 
+    - name: check
+      run: cargo fmt --all --check --verbose
+
     - uses: actions/cache/save@v4
       with:
         path: target/

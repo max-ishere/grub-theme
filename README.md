@@ -15,7 +15,7 @@ Normally the process would look like this:
   - You burn out
 
 Paired with the fact that the iteration cycle is quite slow, this process is going to drive you nuts after a while. Oh,
-and did you know that the documentation is quite lacking too? Like an entire optin was missing and some details are
+and did you know that the documentation is quite lacking too? Like an entire option was missing and some details are
 ommited? Yeah this is very fun. /s
 
 It is time to put an end to this suffering. I decided to make a tool for previewing the GRUB theme. While it is possible

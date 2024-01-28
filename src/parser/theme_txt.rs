@@ -14,21 +14,29 @@
 //! }
 //! "#;
 //!
-//! let doc = Document::parse(theme_txt).unwrap().1;
+//! let doc = Document::parse(theme_txt)?.1;
 //!
-//! assert_eq!(doc, Document(vec![
-//!     Statement::GlobalProperty(GlobalProperty {
-//!         name: "terminal-font".to_string(),
-//!         value: "Monospace".to_string(),
-//!     }),
-//!     Statement::Component(Component {
-//!         name: "label".to_string(),
-//!         properties: vec![ComponentProperty {
-//!             name: "text".to_string(),
-//!             value: "Hello".to_string(),
-//!         }],
-//!     }),
-//! ]));
+//! assert_eq!(
+//!     doc,
+//!     Document(
+//!         [
+//!             Statement::GlobalProperty(GlobalProperty {
+//!                 name: "terminal-font".to_string(),
+//!                 value: "Monospace".to_string(),
+//!             }),
+//!             Statement::Component(Component {
+//!                 name: "label".to_string(),
+//!                 properties: [ComponentProperty {
+//!                     name: "text".to_string(),
+//!                     value: "Hello".to_string(),
+//!                 }]
+//!                 .into(),
+//!             }),
+//!         ]
+//!         .into()
+//!     )
+//! );
+//! # Ok::<(), anyhow::Error>(())
 //! ```
 
 use nom::{
@@ -41,9 +49,11 @@ use nom::{
     IResult, InputLength,
 };
 
+use crate::OwnedSlice;
+
 /// Represents the entire theme.txt file.
 #[derive(Debug, PartialEq, Eq)]
-pub struct Document(pub Vec<Statement>);
+pub struct Document(pub OwnedSlice<[Statement]>);
 
 /// A single statement in the document.
 #[derive(Debug, PartialEq, Eq)]
@@ -53,20 +63,36 @@ pub enum Statement {
 }
 
 /// A key-value pair, separated with `:`.
+///
+/// ```txt
+/// teriminal-font: "Unifont"
+/// ```
 #[derive(Debug, PartialEq, Eq)]
 pub struct GlobalProperty {
     pub name: String,
     pub value: String,
 }
 
-/// A UI component defined as `+ name { `[`Vec<ComponentProperty>`]` }`.
+/// A UI component defined as `+ name { [`[`ComponentProperty`]`] }`.
+/// ```txt
+/// + label {
+///   text = "GRUB bootloader"
+/// }
+/// ```
 #[derive(Debug, PartialEq, Eq)]
 pub struct Component {
     pub name: String,
-    pub properties: Vec<ComponentProperty>,
+    pub properties: OwnedSlice<[ComponentProperty]>,
 }
 
 /// A key-value pair, separated with `=` that modifies how a [`Component`] looks.
+/// ```txt
+/// # + label {
+/// name = value
+/// name = "many words"
+/// name = (120 80) # tuple, not used in GRUB right now
+/// # }
+/// ```
 #[derive(Debug, PartialEq, Eq)]
 pub struct ComponentProperty {
     pub name: String,
@@ -74,10 +100,12 @@ pub struct ComponentProperty {
 }
 
 impl Document {
+    /// Pass in the entire theme.txt file content. The returned string is the remainder that was not parsed (trailing
+    /// comments, etc) and the [`Document`] itsellf.
     pub fn parse(input: &str) -> IResult<&str, Self> {
         let (input, list) = many0(Statement::parse)(input)?;
 
-        Ok((input, Self(list)))
+        Ok((input, Self(list.into())))
     }
 }
 
@@ -99,11 +127,8 @@ impl Statement {
 
 impl GlobalProperty {
     fn parse(input: &str) -> IResult<&str, Self> {
-        let (input, (name, value)) = separated_pair(
-            identifier,
-            delimited(whitespace0, tag(":"), whitespace0),
-            expression,
-        )(input)?;
+        let (input, (name, value)) =
+            separated_pair(identifier, delimited(whitespace0, tag(":"), whitespace0), expression)(input)?;
 
         Ok((
             input,
@@ -150,11 +175,7 @@ impl Component {
 fn component_property(input: &str) -> IResult<&str, (&str, &str)> {
     let (input, ()) = preceded_empty(input)?;
 
-    separated_pair(
-        identifier,
-        delimited(whitespace0, char('='), whitespace0),
-        expression,
-    )(input)
+    separated_pair(identifier, delimited(whitespace0, char('='), whitespace0), expression)(input)
 }
 
 /// Parses a identifier such as component proprety name or a global property name
@@ -188,9 +209,9 @@ fn expression(input: &str) -> IResult<&str, &str> {
 /// let with_comments = r" # some comments
 ///
 ///  #newlines
-/// oh, look, not a comment";
+///     oh, look, not a comment";
 ///
-/// let (stripped, ()) = preceded_empty(with_comments).unwrap();
+/// let (stripped, ()) = preceded_empty(with_comments)?;
 ///
 /// assert_eq!(stripped, "oh, look, not a comment");
 /// ```
@@ -270,9 +291,9 @@ finally stuff" => Ok(("finally stuff", ())); "a comment with content on next lin
     }
 
     mod Statement {
-        use super::super::{Component, ComponentProperty, GlobalProperty, Statement};
-
         use nom::IResult;
+
+        use super::super::{Component, ComponentProperty, GlobalProperty, Statement};
 
         #[test_case(r"# docs
         name: value" => Ok(("", Statement::GlobalProperty(GlobalProperty{
@@ -285,10 +306,10 @@ finally stuff" => Ok(("finally stuff", ())); "a comment with content on next lin
             prop = value # doc
         }" => Ok(("", Statement::Component(Component{
             name: "label".to_string(),
-            properties: vec![ComponentProperty{
+            properties: [ComponentProperty{
                 name: "prop".to_string(),
                 value: "value".to_string(),
-            }]
+            }].into()
         }))); "component with many comments")]
         fn parse(input: &str) -> IResult<&str, Statement> {
             Statement::parse(input)

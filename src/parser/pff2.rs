@@ -1,3 +1,17 @@
+//! PFF2 Font format parser.
+//!
+//! To parse a font file call [`Parser::parse`]. However do keep in mind that successful parsing doesn't mean that the
+//! file contains all the information that GRUB requires. To validate the data use [`Parser::validate`], which returns a
+//! [`Font`]
+//!
+//! ```no_run
+//! # use theme_parser::parser::pff2::*;
+//! # use std::fs::read;
+//! let pff2 = read("font.pf2")?;
+//! let font: Font = Parser::parse(&pff2)?.validate()?;
+//! # Ok::<(), anyhow::Error>(())
+//! ```
+
 use core::fmt::Debug;
 use std::{marker::PhantomData, rc::Rc, string::FromUtf8Error};
 
@@ -6,62 +20,69 @@ use thiserror::Error;
 
 use crate::OwnedSlice;
 
+/// A font object that is supposed to be validated after the file was read. Instead of constructing this youself, make a
+/// `Parser` and call validate on it.
 pub type Font = Pff2<Validated>;
+
+/// A type used for parsing the PFF2 format. This is separate from [`Font`] to make sure that the font data is validated
+/// before it will be used by the code that expects certain properties from a font. See [`Parser::validate`] for details
+///  on the requiements.
 pub type Parser = Pff2<Unchecked>;
 
+/// The internal representation of the UTF code point.
+type Codepoint = u32;
+
+/// The PFF2 font.
+///
+/// Only contains relevant to GRUB metadata about the font as well as the glyph list.
 #[allow(private_bounds)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pff2<T: FontValidation> {
+    /// Font name. Usually includes family, point size and weight
     pub name: String,
+    /// Font family
     pub family: String,
+    /// Size of the font
     pub point_size: u16,
+    /// Weight could be anything like normal, bold or italic
     pub weight: String,
+    /// The dimetions of the glyphs
     pub max_char_width: u16,
+    /// The dimetions of the glyphs
     pub max_char_height: u16,
+    /// The highest point on the glyph (like the top of `M`)
     pub ascent: u16,
+    /// The lowest point on the glyph (like the bottom of `g`)
     pub descent: u16,
+    /// The distance between baselines
     pub leading: u16,
+    /// A list of glyphs that are in the font
     pub glyphs: OwnedSlice<[Glyph]>,
 
     _validation: PhantomData<T>,
 }
 
-impl<T: FontValidation> Default for Pff2<T> {
-    fn default() -> Self {
-        Self {
-            name: Default::default(),
-            family: Default::default(),
-            point_size: Default::default(),
-            weight: Default::default(),
-            max_char_width: Default::default(),
-            max_char_height: Default::default(),
-            ascent: Default::default(),
-            descent: Default::default(),
-            leading: Default::default(),
-
-            glyphs: OwnedSlice::new([]),
-
-            _validation: Default::default(),
-        }
-    }
-}
-
+/// A single glyph inside the font.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Glyph {
-    pub code: u32,
+    /// The UTF codepoint of the character
+    pub code: Codepoint,
 
+    // TODO: document these params
     pub width: u16,
     pub height: u16,
     pub x_offset: u16,
     pub y_offset: u16,
     pub device_width: u16,
 
+    /// The bitmap that represents a rendered glyph.
     pub bitmap: OwnedSlice<[u8]>,
 }
 
 impl Parser {
     const MAGIC: &'static [u8; 4 + 4 + 4] = b"FILE\0\0\0\x04PFF2";
 
+    /// Constructs [`Self`] from a PFF2 buffer.
     pub fn parse(input: &[u8]) -> Result<Self, ParserError> {
         let input_for_data_section = input; // Save this because data offsets are absolute
 
@@ -96,8 +117,7 @@ impl Parser {
                     Descent => font.descent = Self::parse_u16(&input[..length])?,
                     CharIndex => char_indexes = Self::parse_char_indexes(&input[..length])?,
                     Data => {
-                        font.glyphs =
-                            Self::parse_data_section(char_indexes, &input_for_data_section)?;
+                        font.glyphs = Self::parse_data_section(char_indexes, &input_for_data_section)?;
                         break 'parsing;
                     }
                 }
@@ -113,24 +133,21 @@ impl Parser {
         Ok(font)
     }
 
+    /// Returns the section name, length as usize and the rest of the supplied input.
     fn parse_section_header(input: &[u8]) -> Result<([u8; 4], usize, &[u8]), ParserError> {
         let (section, input) = input.split_at(4);
-        let section: [u8; 4] = section
-            .try_into()
-            .map_err(|_| ParserError::InsufficientHeaderBytes)?;
+        let section: [u8; 4] = section.try_into().map_err(|_| ParserError::InsufficientHeaderBytes)?;
 
         let (length, input) = input.split_at(4);
 
-        let length = u32::from_be_bytes(
-            length
-                .try_into()
-                .map_err(|_| ParserError::InsufficientHeaderBytes)?,
-        )
-        .to_usize();
+        let length =
+            u32::from_be_bytes(length.try_into().map_err(|_| ParserError::InsufficientHeaderBytes)?).to_usize();
 
         Ok((section, length, input))
     }
 
+    /// Converts the entirety of input into a UTF-8 string. If the string is `\0` terminated, removes the `\0` before
+    /// conversion.
     fn parse_string(input: &[u8]) -> Result<String, FromUtf8Error> {
         if input.len() == 0 {
             return Ok(String::new());
@@ -143,6 +160,7 @@ impl Parser {
         String::from_utf8(input[..input.len()].to_vec())
     }
 
+    /// Converts the entirety of input into a u16. If the supplied slice is not 2b long, returns an error.
     fn parse_u16(input: &[u8]) -> Result<u16, ParserError> {
         if input.len() != 2 {
             return Err(ParserError::InvalidU16Length(input.len()));
@@ -151,8 +169,11 @@ impl Parser {
         Ok(u16::from_be_bytes([input[0], input[1]]))
     }
 
+    /// Validates [`Self`] to be a valid font that can be used for rendering. See [`FontValidationError`] for reasons a
+    /// font may be invalid.
     pub fn validate(self) -> Result<Font, FontValidationError> {
         use FontValidationError::*;
+
         if self.name.is_empty() {
             return Err(EmptyName);
         }
@@ -187,6 +208,8 @@ impl Parser {
         })
     }
 
+    /// Parses the `CHIX` section and returns the glyph lookup table. Errors out if the character index is not alligned
+    /// properly for reading (length doesnt divide perfectly by allignment)
     fn parse_char_indexes(input: &[u8]) -> Result<Vec<CharIndex>, ParserError> {
         const ALLIGNMENT: usize = 4 + 1 + 4;
 
@@ -205,10 +228,9 @@ impl Parser {
             .collect())
     }
 
-    fn parse_data_section(
-        indexes: Vec<CharIndex>,
-        input: &[u8],
-    ) -> Result<Rc<[Glyph]>, ParserError> {
+    /// Takes the glyph lookup section and combines it with the content of the data section to get the complete glyph
+    /// data.
+    fn parse_data_section(indexes: Vec<CharIndex>, input: &[u8]) -> Result<Rc<[Glyph]>, ParserError> {
         let mut glyphs = Vec::with_capacity(input.len());
 
         for index in indexes {
@@ -259,44 +281,64 @@ enum SectionName {
     Data,
 }
 
+/// An intermediate structure used for reading glyphs from a font file. This is discarded after the glyphs are read.
 struct CharIndex {
-    pub code: u32,
+    pub code: Codepoint,
     pub offset: usize,
 }
 
+/// The PFF2 buffer contained invalid data
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum ParserError {
+    /// The PFF2 buffer should start with magic bytes.
     #[error("Bad PFF2 magic bytes")]
     BadMagicBytes,
 
+    /// Expected to be able to read 4 bytes as the name of the section
     #[error("Insufficient section header bytes")]
     InsufficientHeaderBytes,
 
+    /// Expected to be able to read 4 bytes as a u32 length of the section
     #[error("Insufficient section length bytes")]
     InsufficientLengthBytes,
 
+    /// String stored in a section had illegal UTF-8 bytes
     #[error("Invalid UTF-8 string: {0}")]
     FromUtf8Error(#[from] FromUtf8Error),
 
+    /// Expected a section 2b long because content is expected to be a u16
     #[error("A u16 is not encoded using exactly 2 bytes, instead: {0}b")]
     InvalidU16Length(usize),
 
+    /// The size of the character index section doesnt divide evenly by the size of the individual elements
     #[error("Invalid data in the character index")]
     InvalidCharacterIndex,
 }
 
+/// Convertion from [`Parser`] into [`Font`] failed
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum FontValidationError {
+    /// Font has no name
     #[error("Font has no name")]
     EmptyName,
+
+    /// The dimentions of the characters are 0
     #[error("Font doesnt define maximum glyph width")]
     ZeroMaxCharWidth,
+
+    /// The dimentions of the characters are 0
     #[error("Font doesnt define maximum glyph height")]
     ZeroMaxCharHeight,
+
+    /// Ascent cannot be 0
     #[error("Font doesnt define char ascent")]
     ZeroAscent,
+
+    /// Descent cannot be 0
     #[error("Font doesnt define char descent")]
     ZeroDescent,
+
+    /// Font contains no glyphs or they could not be read
     #[error("Font contains no glyphs")]
     NoGlyphs,
 }
@@ -324,6 +366,26 @@ impl TryFrom<[u8; 4]> for SectionName {
     }
 }
 
+impl<T: FontValidation> Default for Pff2<T> {
+    fn default() -> Self {
+        Self {
+            name: Default::default(),
+            family: Default::default(),
+            point_size: Default::default(),
+            weight: Default::default(),
+            max_char_width: Default::default(),
+            max_char_height: Default::default(),
+            ascent: Default::default(),
+            descent: Default::default(),
+            leading: Default::default(),
+
+            glyphs: [].into(),
+
+            _validation: Default::default(),
+        }
+    }
+}
+
 impl Default for Glyph {
     fn default() -> Self {
         Self {
@@ -335,16 +397,19 @@ impl Default for Glyph {
             y_offset: Default::default(),
             device_width: Default::default(),
 
-            bitmap: OwnedSlice::new([]),
+            bitmap: [].into(),
         }
     }
 }
+
 trait FontValidation: Clone + PartialEq + Eq + Debug {}
 
+#[doc(hidden)]
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Validated;
 impl FontValidation for Validated {}
 
+#[doc(hidden)]
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Unchecked;
 impl FontValidation for Unchecked {}
