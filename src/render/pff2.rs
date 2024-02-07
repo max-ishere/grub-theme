@@ -1,5 +1,40 @@
+//! PFF2 font rendering utilities
+
 use crate::OwnedSlice;
 
+/// A bitmap that can be used to query pixel data in a PFF2 Glyph.
+///
+/// There are 2 ways of querying pixels:
+///
+/// - Using [`Self::pixel()`]
+///
+/// ```rust
+/// # use theme_parser::render::pff2::Bitmap;
+/// #
+/// # || -> Option<()> {
+/// #
+/// let bitmap = Bitmap::new(8, 1, &[0b00000001])?;
+///
+/// let pixel = bitmap.pixel(7, 0)?;
+/// assert_eq!(pixel, true);
+/// #
+/// # Some(())
+/// # }().unwrap()
+/// ```
+///
+/// - Using an iterator
+///
+/// ```rust
+/// # use theme_parser::render::pff2::Bitmap;
+/// #
+/// let bitmap = Bitmap::default();
+///
+/// for row in bitmap {
+///     for pixel in row {
+///         print!("{}", if pixel { "##" } else { "  " });
+///     }
+/// }
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bitmap {
     width: usize,
@@ -26,7 +61,7 @@ impl Bitmap {
     #[allow(unused)]
     const TRANSPARENT_PIXEL: bool = !Self::FILLED_PIXEL;
 
-    /// Calculates the number of bytes required to
+    /// Calculates the length of the bitmap in bytes from the dimentions of the bitmap in pixels
     pub fn byte_count_from_size(width: usize, height: usize) -> usize {
         (width * height + 7) / 8
     }
@@ -47,7 +82,7 @@ impl Bitmap {
         })
     }
 
-    /// Returns [`Some(true)`] if the pixel is filled, [`Some(false)`] if the pixel if transparent, [`None`] if out of
+    /// Returns `Some(true)` if the pixel is filled, `Some(false)` if the pixel if transparent, [`None`] if out of
     /// bounds.
     pub fn pixel(&self, x: usize, y: usize) -> Option<bool> {
         if x >= self.width || y >= self.height {
@@ -72,6 +107,7 @@ impl Bitmap {
         self.height
     }
 
+    /// Creates an iter over self
     pub fn iter(&self) -> BitmapIter {
         self.clone().into_iter()
     }
@@ -98,6 +134,7 @@ impl IntoIterator for &Bitmap {
     }
 }
 
+/// Iterates over the rows of the bitmap, yielding an iterator over the row's elements, [`BitmapRowIter`].
 pub struct BitmapIter {
     bitmap: Bitmap,
     row: usize,
@@ -123,6 +160,7 @@ impl Iterator for BitmapIter {
     }
 }
 
+/// Iterates over the pixels in a bitmap row, where true means filled, false means transparent.
 pub struct BitmapRowIter {
     bitmap: Bitmap,
     row: usize,
@@ -132,7 +170,7 @@ pub struct BitmapRowIter {
 impl Iterator for BitmapRowIter {
     type Item = bool;
 
-    /// Yields an element in the bitmap's row
+    /// Yields an pixel from a bitmap, where true means filled, false means transparent.
     fn next(&mut self) -> Option<Self::Item> {
         if self.col >= self.bitmap.width {
             return None;

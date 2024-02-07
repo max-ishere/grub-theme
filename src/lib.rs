@@ -10,11 +10,13 @@ extern crate log;
 extern crate thiserror;
 
 pub mod parser {
+    //! GRUB theme parsing functionality
     pub mod pff2;
     pub mod theme_txt;
 }
 
 pub mod render {
+    //! GRUB theme rendering functionality
     pub mod pff2;
 }
 
