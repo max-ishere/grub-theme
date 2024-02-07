@@ -1,0 +1,42 @@
+name: Tests
+
+on:
+  push:
+    paths:
+      - '**.rs'
+      - '.github/workflows/**.yml'
+  pull_request:
+    paths:
+      - '**.rs'
+      - '.github/workflows/**.yml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - --lib
+          - --bins
+          - --examples
+          - --tests
+          - --doc
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/cache@v4
+      with:
+        path: target/
+        key: cargo-test-${{ hashFiles('Cargo.lock') }}
+        restore-keys: |
+          cargo-test-${{ hashFiles('Cargo.lock') }}
+          cargo-test-
+          cargo-
+
+    - name: test
+      run: cargo test --no-fail-fast ${{ matrix.target }} --verbose

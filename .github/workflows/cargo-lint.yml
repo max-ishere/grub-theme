@@ -1,0 +1,58 @@
+name: Linter
+
+on:
+  push:
+    paths:
+      - '**.rs'
+      - '.github/workflows/**.yml'
+  pull_request:
+    paths:
+      - '**.rs'
+      - '.github/workflows/**.yml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  clippy:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - --lib
+          - --bins
+          - --examples
+          - --tests
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/cache@v4
+      with:
+        path: target/
+        key: cargo-lint-${{ hashFiles('Cargo.lock') }}
+        restore-keys: |
+          cargo-lint-${{ hashFiles('Cargo.lock') }}
+          cargo-lint-
+          cargo-
+
+    - name: clippy
+      run: cargo clippy --no-deps ${{ matrix.target }} --verbose -- -Dwarnings
+
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: target/
+          key: cargo-lint-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-lint-${{ hashFiles('Cargo.lock') }}
+            cargo-lint-
+            cargo-
+
+      - name: fmt
+        run: cargo fmt --all --check --verbose

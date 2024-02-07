@@ -1,0 +1,40 @@
+name: Build
+
+on:
+  push:
+    paths:
+      - '**.rs'
+      - '.github/workflows/**.yml'
+  pull_request:
+    paths:
+      - '**.rs'
+      - '.github/workflows/**.yml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - --lib
+          - --bins
+          - --examples
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/cache@v4
+      with:
+        path: target/
+        key: cargo-build-${{ hashFiles('Cargo.lock') }}
+        restore-keys: |
+          cargo-build-${{ hashFiles('Cargo.lock') }}
+          cargo-build-
+          cargo-
+
+    - name: build
+      run: cargo build --release ${{ matrix.target }} --keep-going --verbose
