@@ -1,5 +1,10 @@
 # GRUB theming utilities
-*Work in progress*
+*Work in progress* [![Build](https://github.com/max-ishere/grub-theme/actions/workflows/cargo-build.yml/badge.svg?branch=main)](https://github.com/max-ishere/grub-theme/actions/workflows/cargo-build.yml)
+[![Linter](https://github.com/max-ishere/grub-theme/actions/workflows/cargo-lint.yml/badge.svg)](https://github.com/max-ishere/grub-theme/actions/workflows/cargo-lint.yml)
+[![Tests](https://github.com/max-ishere/grub-theme/actions/workflows/cargo-test.yml/badge.svg)](https://github.com/max-ishere/grub-theme/actions/workflows/cargo-test.yml)
+
+[Documentation (latest commit)](https://max-ishere.github.io/grub-theme/theme_parser/index.html)
+[![Deploy `cargo doc` to GitHub Pages](https://github.com/max-ishere/grub-theme/actions/workflows/cargo-doc-pages.yml/badge.svg)](https://github.com/max-ishere/grub-theme/actions/workflows/cargo-doc-pages.yml)
 
 The purpose of this project is to make the process of making GRUB themes much faster and easier for the average user.
 Normally the process would look like this:
