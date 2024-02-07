@@ -11,7 +11,7 @@ struct Args {
     pub font_file: PathBuf,
 
     #[clap(long = "char", short)]
-    pub character: char,
+    pub codepoint: u32,
 }
 
 const SQUARE_BLOCK: &str = "\u{2588}\u{2588}";
@@ -24,8 +24,7 @@ fn main() -> anyhow::Result<()> {
 
     println!("{}", font.name);
 
-    let glyph = font.glyph(args.character).unwrap();
-
+    let glyph = font.glyph(args.codepoint).unwrap();
     render_glyph(glyph);
 
     Ok(())

@@ -63,7 +63,7 @@ pub struct Pff2<T: FontValidation> {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Glyph {
     /// The UTF codepoint of the character
-    pub code: char,
+    pub code: u32,
 
     pub x_offset: isize,
     pub y_offset: isize,
@@ -199,9 +199,8 @@ impl Parser {
                     );
                 }
 
-                // TODO: Investigate why unicode.pf2 contains invalid codepoint 0x40000626 and deal with it.
                 Ok::<_, ParserError>(CharIndex {
-                    code: char::from_u32(codepoint).ok_or(ParserError::InvalidCodepoint(codepoint))?,
+                    code: codepoint,
                     offset: u32::from_be_bytes([chunk[5], chunk[6], chunk[7], chunk[8]]).to_usize(),
                 })
             })
@@ -218,10 +217,7 @@ impl Parser {
 
             // make sure there are enough bytes to read the bitmap dimentions
             if offset + 4 > input.len() {
-                warn!(
-                    "Insufficient data to load a glyph for codepoint {}",
-                    index.code.escape_unicode(),
-                );
+                warn!("Insufficient data to load a glyph for codepoint {:x}", index.code,);
                 continue;
             }
 
@@ -232,10 +228,7 @@ impl Parser {
 
             // make sure there are enough bytes to read the bitmap and the rest of the fields
             if offset + 10 + bitmap_len > input.len() {
-                warn!(
-                    "Insufficient data to load a glyph for codepoint {}",
-                    index.code.escape_unicode()
-                );
+                warn!("Insufficient data to load a glyph for codepoint {:x}", index.code);
                 continue;
             }
 
@@ -307,7 +300,7 @@ impl Parser {
 }
 
 impl<T: FontValidation> Pff2<T> {
-    pub fn glyph(&self, c: char) -> Option<&Glyph> {
+    pub fn glyph(&self, c: u32) -> Option<&Glyph> {
         self.glyphs
             .binary_search_by(|g| (g.code as u32).cmp(&(c as u32)))
             .map(|i| &self.glyphs[i])
@@ -372,7 +365,7 @@ enum Section {
 /// An intermediate structure used for reading glyphs from a font file. This is discarded after the glyphs are read.
 struct CharIndex {
     /// The UCS-4 codepoint
-    pub code: char,
+    pub code: u32,
     /// A file-level (absolute) offset to the glyph data
     pub offset: usize,
 }
