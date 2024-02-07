@@ -271,10 +271,10 @@ impl Parser {
             return Err(E::NoGlyphs);
         }
 
-        let mut last_codepoint = self.glyphs[0].code as u32;
+        let mut last_codepoint = self.glyphs[0].code;
 
         for Glyph { code, .. } in &self.glyphs[1..] {
-            let code = *code as u32;
+            let code = *code;
 
             if code > last_codepoint {
                 last_codepoint = code;
@@ -302,7 +302,7 @@ impl Parser {
 impl<T: FontValidation> Pff2<T> {
     pub fn glyph(&self, c: u32) -> Option<&Glyph> {
         self.glyphs
-            .binary_search_by(|g| (g.code as u32).cmp(&(c as u32)))
+            .binary_search_by(|g| g.code.cmp(&{ c }))
             .map(|i| &self.glyphs[i])
             .ok()
     }
