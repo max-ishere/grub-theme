@@ -13,7 +13,7 @@
 //! ```
 
 use core::fmt::Debug;
-use std::{marker::PhantomData, rc::Rc, string::FromUtf8Error};
+use std::{marker::PhantomData, string::FromUtf8Error};
 
 use nom::{InputLength, ToUsize};
 use thiserror::Error;
@@ -209,7 +209,7 @@ impl Parser {
 
     /// Takes the glyph lookup section and combines it with the content of the data section to get the complete glyph
     /// data. [`CharIndex`] offsets are file-global (absolute), so `input` should be the entirety of the file.
-    fn parse_data_section(indexes: Vec<CharIndex>, input: &[u8]) -> Rc<[Glyph]> {
+    fn parse_data_section(indexes: Vec<CharIndex>, input: &[u8]) -> OwnedSlice<[Glyph]> {
         let mut glyphs = Vec::with_capacity(indexes.len());
 
         for index in indexes {

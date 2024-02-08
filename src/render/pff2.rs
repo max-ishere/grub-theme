@@ -66,10 +66,8 @@ impl Bitmap {
         (width * height + 7) / 8
     }
 
-    /// Constructs self by wrapping the bitmap slice in a [`Rc`] and verifying that it's length is exactly
+    /// Constructs self by wrapping the bitmap slice in a [`OwnedSlice`] and verifying that it's length is exactly
     /// [`Self::byte_count_from_size`].
-    ///
-    /// [`Rc`]: std::rc::Rc
     pub fn new(width: usize, height: usize, bitmap: &[u8]) -> Option<Self> {
         if bitmap.len() != Self::byte_count_from_size(width, height) {
             return None;
