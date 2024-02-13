@@ -27,9 +27,14 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - uses: actions/cache@v4
+    - uses: actions/cache@v3
       with:
-        path: target/
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
         key: cargo-build-${{ hashFiles('Cargo.lock') }}
         restore-keys: |
           cargo-build-${{ hashFiles('Cargo.lock') }}
@@ -38,3 +43,6 @@ jobs:
 
     - name: build
       run: cargo build --release ${{ matrix.target }} --keep-going --verbose
+
+    - name: Debug $CARGO_HOME
+      run: echo $CARGO_HOME
