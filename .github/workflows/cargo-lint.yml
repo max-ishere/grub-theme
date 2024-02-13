@@ -30,7 +30,12 @@ jobs:
 
     - uses: actions/cache@v4
       with:
-        path: target/
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
         key: cargo-lint-${{ hashFiles('Cargo.lock') }}
         restore-keys: |
           cargo-lint-${{ hashFiles('Cargo.lock') }}
